@@ -1,0 +1,146 @@
+version: '3.7'
+
+services:
+  dbt-spark3-thrift:
+    image: godatadriven/spark:3.1.1
+    container_name: dbt-spark3-thrift
+    restart: unless-stopped
+    ports:
+      - "4040:4040"
+      - "10000:10000"
+    depends_on:
+      - dbt-hive-metastore
+    command: >
+      --class org.apache.spark.sql.hive.thriftserver.HiveThriftServer2
+      --name Thrift JDBC/ODBC Server
+    volumes:
+      - ./data/.spark-warehouse:/spark-warehouse/
+      - ./conf/hive-site.xml:/usr/spark/conf/hive-site.xml
+      - ./conf/spark-defaults.conf:/usr/spark/conf/spark-defaults.conf
+    environment:
+      - WAIT_FOR=dbt-hive-metastore:5432
+    networks:
+      spark_net:
+
+  dbt-hive-metastore:
+    image: postgres:9.6.17-alpine
+    container_name: dbt-hive-metastore
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/.hive-metastore/:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=dbt
+      - POSTGRES_PASSWORD=dbt
+      - POSTGRES_DB=metastore
+    networks:
+      spark_net:
+
+  spark-master:
+    image: bitnami/spark:3.1.1
+    container_name: spark-master
+    restart: unless-stopped
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    ports:
+      - "7077:7077"
+      - "8080:8080"
+    networks:
+      spark_net:
+
+  spark-worker:
+    image: bitnami/spark:3.1.1
+    container_name: spark-worker
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=1G
+      - SPARK_WORKER_CORES=1
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    networks:
+      spark_net:
+
+  livy-spark:
+    image: trivadis/apache-livy:0.7.1-incubating-spark3.1
+    container_name: livy-spark
+    restart: unless-stopped
+    environment:
+      - SPARK_MASTER_ENDPOINT=spark-master
+      - SPARK_MASTER_PORT=7077
+      - DEPLOY_MODE=client
+      - SPARK_MASTER=spark://spark-master:7077
+    ports:
+      - "8998:8998"
+    volumes:
+      - ./conf/livy.conf.extra:/opt/livy.conf.extra
+    depends_on:
+      - "spark-master"
+      - "spark-worker"
+    networks:
+      spark_net:
+
+  hue:
+    image: gethue/hue:20220301-140101
+    hostname: hue
+    container_name: hue
+    restart: unless-stopped
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./conf/hue.ini:/usr/share/hue/desktop/conf/z-hue-overrides.ini
+      - ./scripts/wait-for-it.sh:/usr/share/hue/wait-for-it.sh
+    command: ["./wait-for-it.sh", "--timeout=1000", "hue-database:3306", "--", "./startup.sh"]
+    depends_on:
+      - hue-database
+    networks:
+      spark_net:
+
+  hue-database:
+    image: mysql:5.7
+    container_name: hue-database
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    command: [ "--init-file", "/data/application/init.sql" ]
+    volumes:
+      - ./data/huedb:/var/lib/mysql
+      - ./conf/init.sql:/data/application/init.sql
+    environment:
+      MYSQL_ROOT_USER: root
+      MYSQL_ROOT_PASSWORD: secret
+      MYSQL_USER: hue
+      MYSQL_PASSWORD: secret
+      MYSQL_DATABASE: hue
+    networks:
+      spark_net:
+
+  # https://github.com/lorint/AdventureWorks-for-Postgres
+  adventureworks-postgres-db:
+    image: adventureworks-postgres-db
+    container_name: adventureworks-postgres-db
+    restart: unless-stopped
+    build: adventureworks-postgres-db/
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./data/adventure-db:/var/lib/postgresql/data
+    ports:
+      - '5535:5432'
+    networks:
+      spark_net:
+
+networks:
+  spark_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

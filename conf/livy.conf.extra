@@ -1,0 +1,4 @@
+livy.spark.master = spark://spark-master:7077
+livy.file.local-dir-whitelist = /
+livy.spark.driver.memory=1g
+livy.repl.enable-hive-context = true

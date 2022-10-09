@@ -1,0 +1,8 @@
+.DS_Store
+.idea
+.vscode/
+*/sf-data
+data
+*/node_modules
+artifacts
+**/*.zip
